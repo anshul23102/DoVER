@@ -27,6 +27,7 @@ function addColumn(table, column, type) {
 // Ensure all production columns exist for documents table
 const docColumns = [
     ['uploader_email', 'TEXT'],
+    ['registrant_id', 'TEXT'], // User ID of who registered the document (for accountability)
     ['department', 'TEXT DEFAULT "General"'],
     ['prev_hash', 'TEXT'],
     ['storage_id', 'TEXT'],
