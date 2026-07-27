@@ -19,6 +19,10 @@ const { processDocument } = require('../utils/processor');
 const apiKey = require('../middleware/apiKey');
 const { uploadLimiter } = require('../middleware/limiters');
 const { recordUploadVelocity } = require('../utils/abuse');
+const { requireAuth } = require('../middleware/auth');
+const { rateLimit } = require('express-rate-limit');
+const { RedisStore } = require('rate-limit-redis');
+const { createClient } = require('redis');
 
 // Configure multer for temp storage
 const storage = multer.diskStorage({
@@ -45,7 +49,48 @@ const upload = multer({
     }
 });
 
-router.post('/', uploadLimiter, (req, res) => {
+// SECURITY: Per-user rate limit for authenticated document registration/upload.
+// Prevents single accounts from flooding the registry with fake documents.
+// Limit: 50 documents per hour per authenticated user (IP-based for unauthenticated access via uploadLimiter).
+const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+const isTLS = REDIS_URL.startsWith('rediss://');
+const redisClient = createClient({
+    url: REDIS_URL,
+    ...(isTLS ? { socket: { tls: true } } : {})
+});
+
+let redisReady = false;
+redisClient.connect()
+    .then(() => { redisReady = true; })
+    .catch(() => { console.warn('[UPLOAD_LIMITER] Redis offline — using memory store fallback'); });
+
+const userUploadLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: 50, // 50 registrations per hour per authenticated user
+    keyGenerator: (req) => req.user ? `user:${req.user.id || req.user.email}` : `ip:${req.ip}`,
+    skip: (req) => !req.user, // Only apply this limiter to authenticated users
+    store: redisReady ? new RedisStore({
+        sendCommand: async (...args) => {
+            if (!redisReady) throw new Error('Redis not ready');
+            return redisClient.sendCommand(args);
+        },
+        prefix: 'rl:upload:user:',
+    }) : undefined,
+    handler: (req, res, next, options) => {
+        try {
+            db.prepare(`INSERT INTO audit_log (document_id, action, actor, details) VALUES (?, ?, ?, ?)`)
+                .run(0, 'RATE_LIMIT_EXCEEDED', req.user?.email || req.ip, `User upload limit exceeded: ${req.method} ${req.url}`);
+        } catch (_) {}
+        res.status(429).json({
+            success: false,
+            error: 'Too many uploads',
+            message: 'Registration rate limit exceeded. Max 50 documents per hour per account.',
+            retry_after: Math.ceil(options.windowMs / 1000)
+        });
+    }
+});
+
+router.post('/', uploadLimiter, requireAuth, userUploadLimiter, (req, res) => {
     // Record upload attempt for abuse scoring via velocity check
     if (req.user) recordUploadVelocity(req.user.id);
 
@@ -124,6 +169,7 @@ router.post('/', uploadLimiter, (req, res) => {
                 mimetype: req.file.mimetype,
                 uploadedBy,
                 uploaderEmail,
+                registrantId: req.user?.id || null, // SECURITY: Track who registered the document
                 department: userDept,
                 version_number,
                 parent_document_id,
@@ -160,7 +206,7 @@ router.post('/', uploadLimiter, (req, res) => {
     });
 });
 
-router.post('/batch-upload', uploadLimiter, (req, res) => {
+router.post('/batch-upload', uploadLimiter, requireAuth, userUploadLimiter, (req, res) => {
     upload.array('files', 20)(req, res, async (err) => {
         if (err) return res.status(400).json({ success: false, error: err.message });
 
@@ -217,6 +263,7 @@ router.post('/batch-upload', uploadLimiter, (req, res) => {
                     mimetype: file.mimetype,
                     uploadedBy,
                     uploaderEmail,
+                    registrantId: req.user?.id || null, // SECURITY: Track who registered the document
                     department: documentCategory,
                     batch_id: batchId,
                     fileHash
