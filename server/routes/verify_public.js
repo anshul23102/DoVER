@@ -21,12 +21,14 @@ const router  = express.Router();
 const db      = require('../db/db');
 const { verifyLimiter }         = require('../middleware/limiters');
 const { resolveSignatureStatus, buildPublicPayload } = require('../utils/verificationService');
+const { validateHashFormat, rejectAlgorithmParameter, HASH_ALGORITHM } = require('../utils/hashConstants');
 
 // ─────────────────────────────────────────────────────────────
 // GET /api/public/verify/:hash
 // Public hash-lookup — returns a minimal integrity summary.
+// SECURITY: Hash algorithm is hardcoded to SHA-256 (not user-controllable).
 // ─────────────────────────────────────────────────────────────
-router.get('/:hash', verifyLimiter, async (req, res) => {
+router.get('/:hash', verifyLimiter, validateHashFormat, rejectAlgorithmParameter, async (req, res) => {
     try {
         const hash = req.params.hash;
         const doc  = db
@@ -50,8 +52,9 @@ router.get('/:hash', verifyLimiter, async (req, res) => {
 // GET /api/public/verify/qr/:hash
 // QR-code verification — same data shape, dedicated path so QR
 // payloads can be versioned independently in future.
+// SECURITY: Hash algorithm is hardcoded to SHA-256 (not user-controllable).
 // ─────────────────────────────────────────────────────────────
-router.get('/qr/:hash', verifyLimiter, async (req, res) => {
+router.get('/qr/:hash', verifyLimiter, validateHashFormat, rejectAlgorithmParameter, async (req, res) => {
     try {
         const hash = req.params.hash;
         const doc  = db
