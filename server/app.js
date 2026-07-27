@@ -31,6 +31,7 @@ const hmacMiddleware = require('./middleware/hmac');
 const db = require('./db/db');
 const PKIUtils = require('./utils/pki');
 const { createRateLimitRedisStore } = require('./utils/rateLimitRedisStore');
+const helmet = require('helmet');
 
 // ── Startup Initialization ──
 const requiredDirs = ['tmp', 'uploads', 'certs'];
@@ -44,6 +45,37 @@ requiredDirs.forEach(dir => {
 
 const app = express();
 app.set('trust proxy', 1);
+
+// ── Security: HTTPS Enforcement and Security Headers ──
+// Redirect HTTP to HTTPS in production
+if (process.env.NODE_ENV === 'production') {
+    app.use((req, res, next) => {
+        // x-forwarded-proto is set by reverse proxies (Nginx, AWS ALB, etc.)
+        // to indicate the original protocol before TLS termination
+        if (req.header('x-forwarded-proto') !== 'https') {
+            return res.redirect(301, `https://${req.header('host')}${req.url}`);
+        }
+        next();
+    });
+}
+
+// Apply Helmet to set security headers (HSTS, CSP, etc.)
+app.use(helmet({
+    hsts: {
+        maxAge: 31536000,       // 1 year in seconds
+        includeSubDomains: true,
+        preload: true
+    },
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:'],
+            connectSrc: ["'self'"],
+        }
+    }
+}));
 
 // Redis Client for Rate Limiting
 const REDIS_URL_MAIN = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
