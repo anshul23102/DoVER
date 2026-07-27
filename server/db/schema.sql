@@ -76,3 +76,20 @@ CREATE TABLE IF NOT EXISTS key_requests (
     processed_by TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
 );
+
+-- ── Performance Indexes ──
+-- Hash lookup (core registry operation) should complete in sub-millisecond time.
+-- Without this index, lookups degrade to O(N) full table scans as document count grows.
+-- The UNIQUE constraint also prevents duplicate hash registration at DB level.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
+
+-- Compound index for registrant (uploader) lookups ordered by timestamp.
+-- Supports queries like: SELECT * FROM documents WHERE uploaded_by=? ORDER BY upload_timestamp DESC
+CREATE INDEX IF NOT EXISTS idx_documents_uploader_timestamp
+    ON documents(uploaded_by, upload_timestamp DESC);
+
+-- Support audit log queries filtered by document
+CREATE INDEX IF NOT EXISTS idx_audit_log_document_id ON audit_log(document_id);
+
+-- Support key registry lookups by fingerprint
+CREATE UNIQUE INDEX IF NOT EXISTS idx_key_registry_fingerprint ON key_registry(fingerprint);
